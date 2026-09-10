@@ -1,4 +1,4 @@
-﻿"""
+"""
 Головний файл запуску Telegram-бота «Патріотична Музика УПА».
 Завантажує та надсилає реальні MP4 відео за прямими посиланнями конкретних авторів:
 1. Автоматично з налаштовуваним інтервалом (за замовчуванням кожні 10 хв).
@@ -74,9 +74,9 @@ async def send_random_song(bot: Bot, chat_id: int) -> bool:
     # 2. Вибираємо випадкову пісню зі 100 історичних пісень
     song = get_random_song_from_100()
 
-    # Завантажуємо MP4 відео у фоновому потоці
-    video_path = await asyncio.to_thread(media_engine.download_mp4_video, song)
-    caption = media_engine.format_song_caption(song)
+    # Завантажуємо MP4 відео та отримуємо гарантовано робоче посилання YouTube
+    video_path, real_video_url = await asyncio.to_thread(media_engine.download_mp4_and_get_video_url, song)
+    caption = media_engine.format_song_caption(song, real_video_url)
 
     try:
         if video_path and video_path.exists():
