@@ -5,7 +5,7 @@
 2. За командою /music (або /song, /play) у будь-який момент.
 3. Налаштування інтервалу таймера через /settings [час].
 4. Додавання власних відео/аудіо через /addmusic.
-5. Працює 24/7 на Render.com з вбудованим health check сервером.
+5. Працює 24/7 на Render.com з вбудованим HTTP health check сервером.
 """
 
 import sys
@@ -20,7 +20,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ChatType, ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.types import FSInputFile
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramConflictError
 
 import config
 import database
@@ -89,7 +89,7 @@ async def send_random_song(bot: Bot, chat_id: int) -> bool:
                 supports_streaming=True
             )
         else:
-            # Якщо мережа тимчасово недоступна для скачування великого файлу — відправляємо повідомлення з прямим відео
+            # Якщо завантаження недоступне — відправляємо структуроване повідомлення
             await bot.send_message(
                 chat_id=chat_id,
                 text=caption,
@@ -368,7 +368,7 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", config.PORT)
     await site.start()
-    logger.info(f"Health-check веб-сервер запущено на порту {config.PORT}")
+    logger.info(f"Health-check веб-сервер успішно запущено на порту {config.PORT}")
 
 
 # ---------------- Головна функція запуску ----------------
@@ -377,18 +377,29 @@ async def main():
         logger.error("ПОМИЛКА: Не задано BOT_TOKEN у файлі .env або змінних середовища Render!")
         sys.exit(1)
 
-    # Ініціалізація бази даних
+    # 1. ЗАПУСК ВЕБ-СЕРВЕРА В ПЕРШУ ЧЕРГУ ДЛЯ RENDER (миттєве відкриття порту)
+    try:
+        await start_web_server()
+    except Exception as e:
+        logger.error(f"Помилка запуску веб-сервера: {e}")
+
+    # 2. Ініціалізація бази даних
     await database.init_db()
 
     bot = Bot(token=config.BOT_TOKEN)
 
-    # Запускаємо фоновий веб-сервер та фоновий worker автоплею
-    asyncio.create_task(start_web_server())
+    # 3. Очищаємо вебхуки та старі запити для уникнення конфліктів
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        logger.warning(f"Не вдалося скинути webhook: {e}")
+
+    # 4. Запускаємо фоновий worker автоплею
     asyncio.create_task(auto_play_worker(bot))
 
     logger.info("Бот успішно підключився до Telegram та готовий до роботи!")
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(), drop_pending_updates=True)
     finally:
         await bot.session.close()
 

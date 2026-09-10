@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -11,6 +11,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 # Головний Супер-Адміністратор бота
 SUPER_ADMIN_ID = 998913975
+
+# Порт для Render.com (Render передає його через змінну оточення PORT)
+PORT = int(os.getenv("PORT", 10000))
 
 # Шлях до бази даних SQLite
 DB_PATH = BASE_DIR / "music_bot.db"
@@ -74,3 +77,7 @@ def format_duration_ukr(minutes: int) -> str:
         return f"{hours} годин"
     else:
         return f"{hours} год. {rem_min} хв."
+
+
+parse_duration = parse_time_duration
+format_duration = format_duration_ukr
