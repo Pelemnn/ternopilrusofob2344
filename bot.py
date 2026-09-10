@@ -1,11 +1,11 @@
-"""
-Головний файл запуску Telegram-бота «Патріотична Музика».
-Завантажує та надсилає реальну аудіодоріжку пісні та посилання на повне відео:
+﻿"""
+Головний файл запуску Telegram-бота «Патріотична Музика УПА».
+Завантажує та надсилає реальні MP4 відео за прямими посиланнями конкретних авторів:
 1. Автоматично з налаштовуваним інтервалом (за замовчуванням кожні 10 хв).
-2. За командою /music (або /song) у будь-який момент.
+2. За командою /music (або /song, /play) у будь-який момент.
 3. Налаштування інтервалу таймера через /settings [час].
-4. Додавання власних аудіо/відео через /addmusic.
-5. Працює 24/7 на Render.com.
+4. Додавання власних відео/аудіо через /addmusic.
+5. Працює 24/7 на Render.com з вбудованим health check сервером.
 """
 
 import sys
@@ -52,19 +52,19 @@ async def check_admin_rights(message: types.Message) -> bool:
 
 async def send_random_song(bot: Bot, chat_id: int) -> bool:
     """
-    Завантажує звук із відео, надсилає аудіотрек у чат та додає посилання на відеокліп.
+    Завантажує MP4 відео за прямим посиланням автора та надсилає його в чат.
     """
     # 1. Перевіряємо кастомні завантажені треки через file_id
     custom_song = await database.get_random_song()
     if custom_song and random.random() < 0.25:
         caption = (
-            f"🎵 <b>{custom_song['title']}</b>\n"
+            f"🎬 <b>{custom_song['title']}</b>\n"
             f"👤 <i>{custom_song['author']}</i>\n\n"
             f"🇺🇦 <i>Слава Україні! Героям Слава!</i>"
         )
         try:
             if custom_song['file_type'] == "video":
-                await bot.send_video(chat_id=chat_id, video=custom_song['file_id'], caption=caption, parse_mode=ParseMode.HTML)
+                await bot.send_video(chat_id=chat_id, video=custom_song['file_id'], caption=caption, parse_mode=ParseMode.HTML, supports_streaming=True)
             else:
                 await bot.send_audio(chat_id=chat_id, audio=custom_song['file_id'], caption=caption, parse_mode=ParseMode.HTML)
             return True
@@ -74,23 +74,22 @@ async def send_random_song(bot: Bot, chat_id: int) -> bool:
     # 2. Вибираємо випадкову пісню зі 100 історичних пісень
     song = get_random_song_from_100()
 
-    # Завантажуємо звук з відео у неблокуючому фоновому потоці
-    audio_path, video_url = await asyncio.to_thread(media_engine.download_audio_and_get_video_url, song)
-    caption = media_engine.format_song_caption(song, video_url)
+    # Завантажуємо MP4 відео у фоновому потоці
+    video_path = await asyncio.to_thread(media_engine.download_mp4_video, song)
+    caption = media_engine.format_song_caption(song)
 
     try:
-        if audio_path and audio_path.exists():
-            audio_file = FSInputFile(audio_path)
-            await bot.send_audio(
+        if video_path and video_path.exists():
+            video_file = FSInputFile(video_path)
+            await bot.send_video(
                 chat_id=chat_id,
-                audio=audio_file,
-                title=song["title"],
-                performer=song["author"],
+                video=video_file,
                 caption=caption,
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                supports_streaming=True
             )
         else:
-            # Якщо завантаження заблоковано мережею — відправляємо структуроване повідомлення з відео
+            # Якщо мережа тимчасово недоступна для скачування великого файлу — відправляємо повідомлення з прямим відео
             await bot.send_message(
                 chat_id=chat_id,
                 text=caption,
@@ -99,16 +98,19 @@ async def send_random_song(bot: Bot, chat_id: int) -> bool:
             )
         return True
     except (TelegramForbiddenError, TelegramBadRequest) as e:
-        logger.warning(f"Не вдалося надіслати пісню у чат {chat_id}: {e}")
+        logger.warning(f"Не вдалося надіслати відео у чат {chat_id}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Помилка при надсиланні пісні: {e}")
         return False
 
 
 async def auto_play_worker(bot: Bot):
     """
-    Фоновий процес: перевіряє чати кожні 20 секунд і надсилає пісню,
+    Фоновий процес: перевіряє чати кожні 20 секунд і надсилає MP4 відео,
     якщо настав час згідно з індивідуальним інтервалом кожного чату.
     """
-    logger.info("Фоновий таймер авто-відправки пісень запущено.")
+    logger.info("Фоновий таймер авто-відправки MP4 пісень запущено.")
     while True:
         try:
             await asyncio.sleep(20)
@@ -130,16 +132,16 @@ async def cmd_start(message: types.Message):
 
     text = (
         "🇺🇦 <b>Привіт! Я бот «Патріотична Музика УПА».</b>\n\n"
-        "У моїй базі зібрано <b>100 культових історичних пісень</b> (ОУН-УПА 1940-х, Січові Стрільці, Козацькі думи).\n\n"
-        "Я <b>завантажую звук із відео</b>, надсилаю аудіотрек прямо в чат та додаю посилання на повний відеокліп:\n"
+        "У моїй базі зібрано <b>100 автентичних історичних пісень</b> (ОУН-УПА 1940-х, Січові Стрільці 1914–1920, Козацькі думи).\n\n"
+        "Я <b>завантажую та надсилаю виключно MP4 відео</b> за прямими посиланнями авторів:\n"
         "• ⏰ <b>Автоматично за таймером</b> (за замовчуванням кожні 10 хв)!\n"
-        "• 🎵 За командою <code>/music</code> у будь-який момент!\n\n"
+        "• 🎬 За командою <code>/music</code> у будь-який момент!\n\n"
         "<b>Команди:</b>\n"
-        "• /music або /song — Отримати випадкову пісню зараз\n"
+        "• /music або /song — Отримати випадкове MP4 відео зараз\n"
         "• /settings [час] — Налаштувати таймер авто-відправки (наприклад: <code>/settings 5m</code>, <code>/settings 15m</code>, <code>/settings 1h</code>)\n"
         "• /list — Список 100 пісень у базі\n"
         "• /autoplay on|off — Увімкнути/вимкнути автоплей у чаті\n"
-        "• /addmusic [назва] — Додати власне аудіо/відео (для адміна)\n\n"
+        "• /addmusic [назва] — Додати власне відео/аудіо (для адміна)\n\n"
         "🇺🇦 <i>Слава Україні! Героям Слава!</i>"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
@@ -150,15 +152,15 @@ async def cmd_help(message: types.Message):
     """Обробник команди /help."""
     text = (
         "📋 <b>Список команд бота:</b>\n\n"
-        "🎵 <b>Музика:</b>\n"
-        "• /music або /song — Надіслати випадковий аудіотрек із посиланням на відео\n"
+        "🎬 <b>Музичні MP4 відео:</b>\n"
+        "• /music або /song — Надіслати випадкове MP4 відео з автором і приспівом\n"
         "• /list — Переглянути каталог 100 історичних пісень\n\n"
         "⚙️ <b>Налаштування автоплею:</b>\n"
         "• <code>/settings</code> — Переглянути поточний інтервал відправки\n"
         "• <code>/settings [час]</code> — Встановити свій інтервал (наприклад: <code>/settings 5m</code>, <code>/settings 15m</code>, <code>/settings 30m</code>, <code>/settings 1h</code>)\n"
         "• <code>/autoplay on</code> або <code>/autoplay off</code> — Увімкнути/вимкнути автоплей\n\n"
         "👮‍♂️ <b>Для адміністраторів:</b>\n"
-        "• <code>/addmusic [назва]</code> (відповіддю на аудіо/відео або з файлом) — Додати трек у базу\n"
+        "• <code>/addmusic [назва]</code> (відповіддю на відео/аудіо або з файлом) — Додати в базу\n"
         "• <code>/delmusic [ID]</code> — Видалити пісню за номером\n"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
@@ -166,7 +168,7 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("music", "song", "play"))
 async def cmd_music(message: types.Message, bot: Bot):
-    """Миттєва відправка випадкової пісні зі 100 шедеврів."""
+    """Миттєва відправка випадкового MP4 відео зі 100 шедеврів."""
     chat_title = message.chat.title or message.from_user.full_name or "Chat"
     await database.register_chat(message.chat.id, chat_title)
 
@@ -178,105 +180,142 @@ async def cmd_settings(message: types.Message, command: CommandObject):
     """Налаштування інтервалу авто-відправки пісень у чаті."""
     is_admin = await check_admin_rights(message)
     if not is_admin and message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-        await message.reply("❌ Змінювати налаштування чату можуть лише адміністратори.")
+        await message.reply("⚠️ Тільки адміністратори чату можуть змінювати налаштування таймера.")
         return
 
-    if command.args:
-        parsed_min = config.parse_time_duration(command.args.strip())
-        if parsed_min and parsed_min > 0:
-            await database.set_chat_interval(message.chat.id, parsed_min)
-            duration_str = config.format_duration_ukr(parsed_min)
-            await message.answer(
-                f"✅ <b>Інтервал оновлено!</b>\n"
-                f"Тепер бот автоматично надсилатиме нову пісню кожні <b>{duration_str}</b>.",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        else:
-            await message.reply(
-                "❌ Неправильний формат часу.\n"
-                "Приклади: <code>/settings 5m</code>, <code>/settings 15m</code>, <code>/settings 30m</code>, <code>/settings 1h</code>, <code>/settings 2h</code>",
-                parse_mode=ParseMode.HTML
-            )
-            return
+    chat_id = message.chat.id
+    current_chat = await database.get_chat_settings(chat_id)
+    if not current_chat:
+        chat_title = message.chat.title or message.from_user.full_name or "Chat"
+        await database.register_chat(chat_id, chat_title)
+        current_chat = await database.get_chat_settings(chat_id)
 
-    settings = await database.get_chat_settings(message.chat.id)
-    status_str = "Увімкнено ▶️" if settings["autoplay_enabled"] else "Вимкнено ⏹️"
-    duration_str = config.format_duration_ukr(settings["interval_minutes"])
+    arg = command.args.strip() if command.args else ""
+    if not arg:
+        current_mins = current_chat["interval_minutes"]
+        time_text = config.format_duration(current_mins)
+        status_text = "🟢 Увімкнено" if current_chat["autoplay_enabled"] else "🔴 Вимкнено"
 
-    text = (
-        f"⚙️ <b>Налаштування автоплею для цього чату:</b>\n\n"
-        f"• <b>Статус:</b> {status_str}\n"
-        f"• <b>Поточний інтервал:</b> кожні <b>{duration_str}</b>\n\n"
-        f"💡 <b>Як змінити інтервал:</b>\n"
-        f"Напишіть: <code>/settings [час]</code>\n\n"
-        f"<i>Приклади:</i>\n"
-        f"• <code>/settings 5m</code> — кожні 5 хвилин\n"
-        f"• <code>/settings 10m</code> — кожні 10 хвилин (стандарт)\n"
-        f"• <code>/settings 15m</code> — кожні 15 хвилин\n"
-        f"• <code>/settings 30m</code> — кожні 30 хвилин\n"
-        f"• <code>/settings 1h</code> — щогодини\n"
-        f"• <code>/settings 2h</code> — кожні 2 години"
+        text = (
+            f"⚙️ <b>Поточні налаштування автоплею:</b>\n\n"
+            f"• ⏱️ Інтервал відправки: <b>кожні {time_text}</b>\n"
+            f"• 📡 Статус автоплею: <b>{status_text}</b>\n\n"
+            f"Щоб змінити інтервал, напишіть:\n"
+            f"👉 <code>/settings 5m</code> (кожні 5 хв)\n"
+            f"👉 <code>/settings 15m</code> (кожні 15 хв)\n"
+            f"👉 <code>/settings 30m</code> (кожні 30 хв)\n"
+            f"👉 <code>/settings 1h</code> (щогодини)\n"
+            f"👉 <code>/settings 2h</code> (кожні 2 години)"
+        )
+        await message.answer(text, parse_mode=ParseMode.HTML)
+        return
+
+    new_minutes = config.parse_duration(arg)
+    if new_minutes is None:
+        await message.reply(
+            "⚠️ Невірний формат часу!\n"
+            "Приклади: <code>/settings 5m</code>, <code>/settings 15m</code>, <code>/settings 1h</code>, <code>/settings 2h30m</code>."
+        )
+        return
+
+    await database.update_chat_interval(chat_id, new_minutes)
+    formatted_time = config.format_duration(new_minutes)
+    await message.answer(
+        f"✅ <b>Інтервал успішно змінено!</b>\n"
+        f"Тепер MP4 відео будуть надсилатися <b>кожні {formatted_time}</b>.",
+        parse_mode=ParseMode.HTML
     )
-    await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @dp.message(Command("autoplay"))
 async def cmd_autoplay(message: types.Message, command: CommandObject):
-    """Управління авто-відправкою."""
-    arg = command.args.strip().lower() if command.args else ""
-    if arg in ("off", "0", "вимк", "вимкнути"):
-        await database.set_autoplay(message.chat.id, False)
-        await message.answer("⏹️ Автоматичну відправку пісень <b>вимкнено</b> для цього чату.", parse_mode=ParseMode.HTML)
-    elif arg in ("on", "1", "увімк", "увімкнути"):
-        await database.set_autoplay(message.chat.id, True)
-        settings = await database.get_chat_settings(message.chat.id)
-        duration_str = config.format_duration_ukr(settings["interval_minutes"])
-        await message.answer(f"▶️ Автоматичну відправку пісень <b>увімкнено</b> (інтервал: кожні {duration_str})!", parse_mode=ParseMode.HTML)
+    """Увімкнення або вимкнення автоматичної відправки пісень."""
+    is_admin = await check_admin_rights(message)
+    if not is_admin and message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await message.reply("⚠️ Тільки адміністратори чату можуть змінювати статус автоплею.")
+        return
+
+    arg = (command.args or "").strip().lower()
+    chat_id = message.chat.id
+
+    if arg in ("on", "1", "true", "так", "увімк"):
+        await database.set_chat_autoplay(chat_id, True)
+        await message.reply("🟢 <b>Автоплей увімкнено!</b> MP4 пісні надсилатимуться за графіком.", parse_mode=ParseMode.HTML)
+    elif arg in ("off", "0", "false", "ні", "вимк"):
+        await database.set_chat_autoplay(chat_id, False)
+        await message.reply("🔴 <b>Автоплей вимкнено.</b> Пісні надсилатимуться тільки за командою /music.", parse_mode=ParseMode.HTML)
     else:
+        chat_data = await database.get_chat_settings(chat_id)
+        current = "🟢 Увімкнено" if (chat_data and chat_data["autoplay_enabled"]) else "🔴 Вимкнено"
         await message.reply(
-            "ℹ️ <b>Як використовувати:</b>\n"
-            "• <code>/autoplay on</code> — увімкнути авто-відправку\n"
-            "• <code>/autoplay off</code> — вимкнути авто-відправку",
+            f"Статус автоплею: <b>{current}</b>\n\n"
+            f"Використання:\n"
+            f"• <code>/autoplay on</code> — увімкнути\n"
+            f"• <code>/autoplay off</code> — вимкнути",
             parse_mode=ParseMode.HTML
         )
 
 
+@dp.message(Command("list"))
+async def cmd_list(message: types.Message, command: CommandObject):
+    """Показує список пісень посторінково."""
+    page = 1
+    if command.args and command.args.strip().isdigit():
+        page = max(1, int(command.args.strip()))
+
+    per_page = 10
+    total_pages = (len(SONGS_100) + per_page - 1) // per_page
+    page = min(page, total_pages)
+
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    current_songs = SONGS_100[start_idx:end_idx]
+
+    lines = [f"📚 <b>Каталог історичних пісень (Сторінка {page}/{total_pages}):</b>\n"]
+    for s in current_songs:
+        lines.append(f"<b>#{s['id']:03d}</b> {s['title']} — <i>{s['author']}</i> ({s['category']})")
+
+    lines.append(f"\n👉 Щоб відкрити іншу сторінку, введіть: <code>/list 2</code> (від 1 до {total_pages})")
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 @dp.message(Command("addmusic"))
 async def cmd_addmusic(message: types.Message, command: CommandObject):
-    """Додавання власного треку у базу бота (для адміна)."""
+    """Додавання власної пісні у базу даних бота (відео або аудіо)."""
     is_admin = await check_admin_rights(message)
     if not is_admin:
-        await message.reply("❌ Додавати пісні можуть лише адміністратори.")
+        await message.reply("⚠️ Ця команда доступна лише для супер-адміна.")
         return
 
+    title = command.args.strip() if command.args else "Патріотичний трек"
+    author = message.from_user.full_name or "Користувач"
+
     target_msg = message.reply_to_message if message.reply_to_message else message
+
     file_id = None
     file_type = "audio"
 
-    if target_msg.audio:
-        file_id = target_msg.audio.file_id
-        file_type = "audio"
-    elif target_msg.video:
+    if target_msg.video:
         file_id = target_msg.video.file_id
         file_type = "video"
-    elif target_msg.document:
+    elif target_msg.audio:
+        file_id = target_msg.audio.file_id
+        file_type = "audio"
+    elif target_msg.document and target_msg.document.mime_type and target_msg.document.mime_type.startswith("video/"):
+        file_id = target_msg.document.file_id
+        file_type = "video"
+    elif target_msg.document and target_msg.document.mime_type and target_msg.document.mime_type.startswith("audio/"):
         file_id = target_msg.document.file_id
         file_type = "audio"
 
     if not file_id:
         await message.reply(
-            "ℹ️ <b>Як додати свій трек:</b>\n"
-            "1. Надішліть аудіо або відео файл із підписом: <code>/addmusic Назва пісні</code>\n"
-            "2. Або відповідайте командою <code>/addmusic Назва</code> на будь-який аудіо/відео файл.",
+            "⚠️ Будь ласка, прикріпіть відео/аудіо до команди або надішліть команду <code>/addmusic Назва</code> відповіддю на файл!",
             parse_mode=ParseMode.HTML
         )
         return
 
-    title = command.args.strip() if command.args else "Українська патріотична пісня"
-    author = "ОУН-УПА / Народна"
-
-    await database.add_song(
+    song_id = await database.add_custom_song(
         title=title,
         author=author,
         file_id=file_id,
@@ -285,85 +324,77 @@ async def cmd_addmusic(message: types.Message, command: CommandObject):
     )
 
     await message.reply(
-        f"✅ <b>Пісню «{title}» успішно додано!</b>\n"
-        f"Тепер вона буде в ротації автоплею та за командою /music.",
+        f"✅ <b>Пісню успішно збережено в базу!</b>\n"
+        f"• ID: <code>{song_id}</code>\n"
+        f"• Назва: <b>{title}</b>\n"
+        f"• Тип: <b>{file_type.upper()}</b>",
         parse_mode=ParseMode.HTML
     )
 
 
-@dp.message(Command("list"))
-async def cmd_list(message: types.Message):
-    """Відображає каталог 100 пісень та додані користувацькі треки."""
-    custom_songs = await database.get_all_songs()
+@dp.message(Command("delmusic"))
+async def cmd_delmusic(message: types.Message, command: CommandObject):
+    """Видалення пісні з бази за її ID."""
+    is_admin = await check_admin_rights(message)
+    if not is_admin:
+        await message.reply("⚠️ Ця команда доступна лише для супер-адміна.")
+        return
 
-    upa_count = sum(1 for s in SONGS_100 if "УПА" in s["category"])
-    uss_count = sum(1 for s in SONGS_100 if "УСС" in s["category"])
-    cossack_count = sum(1 for s in SONGS_100 if "Козацька" in s["category"] or "Стародавня" in s["category"])
+    if not command.args or not command.args.strip().isdigit():
+        await message.reply("⚠️ Вкажіть ID пісні: <code>/delmusic [ID]</code>", parse_mode=ParseMode.HTML)
+        return
 
-    text = (
-        "📚 <b>Каталог зі 100 історичних українських пісень:</b>\n\n"
-        f"• 🗡️ <b>Пісні ОУН-УПА (1940-ві роки):</b> {upa_count} пісень\n"
-        f"• 🦅 <b>Пісні Січових Стрільців (УСС 1914–1920):</b> {uss_count} пісень\n"
-        f"• 🐎 <b>Старовинні Козацькі та Повстанські думи:</b> {cossack_count} пісень\n"
-        f"• 🎵 <b>Всього у колекції:</b> 100 культових творів!\n"
-    )
-
-    if custom_songs:
-        text += f"\n⭐ <b>Додатково завантажено адмінами:</b> {len(custom_songs)} треків."
-
-    text += "\n\n💡 <i>Надішліть /music, щоб отримати аудіотрек із посиланням на відео просто зараз!</i>"
-    await message.answer(text, parse_mode=ParseMode.HTML)
+    song_id = int(command.args.strip())
+    success = await database.delete_custom_song(song_id)
+    if success:
+        await message.reply(f"✅ Пісню #{song_id} видалено з бази.")
+    else:
+        await message.reply(f"❌ Пісню з ID #{song_id} не знайдено.")
 
 
-# --- Render.com HTTP Health-Check Server ---
-async def handle_health_check(request):
-    return web.Response(text="Ukrainian Music Bot (100 Historic Songs) is running! 🇺🇦", content_type="text/plain")
+# ---------------- HTTP Health Check Server для Render ----------------
+async def handle_health_check(request: web.Request) -> web.Response:
+    """Відповідає 200 OK для запобігання засинанню бота на Render."""
+    return web.Response(text="Ukrainian Patriotic MP4 Music Bot is running 24/7!", status=200)
 
 
-async def start_web_server(port: int):
-    """Запускає HTTP сервер для проходження health check на Render.com"""
+async def start_web_server():
+    """Запускає веб-сервер на потрібному порту Render.com."""
     app = web.Application()
     app.router.add_get("/", handle_health_check)
     app.router.add_get("/health", handle_health_check)
+
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, "0.0.0.0", config.PORT)
     await site.start()
-    logger.info(f"HTTP health-check сервер запущено на порту {port} (для Render.com)")
+    logger.info(f"Health-check веб-сервер запущено на порту {config.PORT}")
 
 
+# ---------------- Головна функція запуску ----------------
 async def main():
-    """Точка входу в програму."""
-    if not config.BOT_TOKEN:
-        logger.critical(
-            "ПОМИЛКА: Не вказано BOT_TOKEN!\n"
-            "Створіть файл .env або додайте змінну оточення BOT_TOKEN у налаштуваннях Render."
-        )
+    if not config.BOT_TOKEN or config.BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+        logger.error("ПОМИЛКА: Не задано BOT_TOKEN у файлі .env або змінних середовища Render!")
         sys.exit(1)
 
+    # Ініціалізація бази даних
     await database.init_db()
-    logger.info("База даних SQLite успішно ініціалізована.")
-
-    port_env = os.getenv("PORT")
-    if port_env:
-        try:
-            port = int(port_env)
-            await start_web_server(port)
-        except Exception as e:
-            logger.warning(f"Не вдалося запустити health-check сервер на порту {port_env}: {e}")
 
     bot = Bot(token=config.BOT_TOKEN)
-    logger.info(f"Запуск бота Музики УПА на 100 пісень (Супер-адмін: {config.SUPER_ADMIN_ID})...")
 
-    # Запуск фонового процесу авто-відправки
+    # Запускаємо фоновий веб-сервер та фоновий worker автоплею
+    asyncio.create_task(start_web_server())
     asyncio.create_task(auto_play_worker(bot))
 
+    logger.info("Бот успішно підключився до Telegram та готовий до роботи!")
     try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         await bot.session.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот зупинений.")
