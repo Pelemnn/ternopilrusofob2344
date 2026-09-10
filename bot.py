@@ -1,11 +1,10 @@
 """
-Головний файл запуску Telegram-бота «Патріотична Музика MP4».
-Містить 100 культових українських пісень (УПА, УСС, Народні, Бойові)
-та надсилає ВИКЛЮЧНО РЕАЛЬНІ MP4 ВІДЕО-ТРЕКИ:
+Головний файл запуску Telegram-бота «Патріотична Музика».
+Завантажує та надсилає реальну аудіодоріжку пісні та посилання на повне відео:
 1. Автоматично з налаштовуваним інтервалом (за замовчуванням кожні 10 хв).
 2. За командою /music (або /song) у будь-який момент.
-3. Додавання нових MP4 відео адміном через /addmusic.
-4. Налаштування інтервалу таймера через /settings [час].
+3. Налаштування інтервалу таймера через /settings [час].
+4. Додавання власних аудіо/відео через /addmusic.
 5. Працює 24/7 на Render.com.
 """
 
@@ -51,15 +50,15 @@ async def check_admin_rights(message: types.Message) -> bool:
     return False
 
 
-async def send_random_mp4_song(bot: Bot, chat_id: int) -> bool:
+async def send_random_song(bot: Bot, chat_id: int) -> bool:
     """
-    Надсилає реальний MP4 відеофайл пісні зі 100 українських шедеврів або бази бота.
+    Завантажує звук із відео, надсилає аудіотрек у чат та додає посилання на відеокліп.
     """
-    # 1. Перевіряємо, чи є завантажені користувацькі треки через file_id
+    # 1. Перевіряємо кастомні завантажені треки через file_id
     custom_song = await database.get_random_song()
-    if custom_song and random.random() < 0.3:  # 30% шанс на кастомні треки, якщо є
+    if custom_song and random.random() < 0.25:
         caption = (
-            f"🎬 <b>{custom_song['title']}</b>\n"
+            f"🎵 <b>{custom_song['title']}</b>\n"
             f"👤 <i>{custom_song['author']}</i>\n\n"
             f"🇺🇦 <i>Слава Україні! Героям Слава!</i>"
         )
@@ -72,37 +71,50 @@ async def send_random_mp4_song(bot: Bot, chat_id: int) -> bool:
         except Exception as e:
             logger.warning(f"Помилка відправки custom file_id: {e}")
 
-    # 2. Вибираємо випадкову пісню зі 100 українських пісень
+    # 2. Вибираємо випадкову пісню зі 100 історичних пісень
     song = get_random_song_from_100()
-    mp4_path = media_engine.generate_song_mp4(song)
-    caption = media_engine.format_song_caption(song)
+
+    # Завантажуємо звук з відео у неблокуючому фоновому потоці
+    audio_path, video_url = await asyncio.to_thread(media_engine.download_audio_and_get_video_url, song)
+    caption = media_engine.format_song_caption(song, video_url)
 
     try:
-        video_file = FSInputFile(mp4_path)
-        await bot.send_video(
-            chat_id=chat_id,
-            video=video_file,
-            caption=caption,
-            parse_mode=ParseMode.HTML
-        )
+        if audio_path and audio_path.exists():
+            audio_file = FSInputFile(audio_path)
+            await bot.send_audio(
+                chat_id=chat_id,
+                audio=audio_file,
+                title=song["title"],
+                performer=song["author"],
+                caption=caption,
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            # Якщо завантаження заблоковано мережею — відправляємо структуроване повідомлення з відео
+            await bot.send_message(
+                chat_id=chat_id,
+                text=caption,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=False
+            )
         return True
     except (TelegramForbiddenError, TelegramBadRequest) as e:
-        logger.warning(f"Не вдалося надіслати MP4 у чат {chat_id}: {e}")
+        logger.warning(f"Не вдалося надіслати пісню у чат {chat_id}: {e}")
         return False
 
 
 async def auto_play_worker(bot: Bot):
     """
-    Фоновий процес: перевіряє чати кожні 20 секунд і надсилає MP4 пісню,
+    Фоновий процес: перевіряє чати кожні 20 секунд і надсилає пісню,
     якщо настав час згідно з індивідуальним інтервалом кожного чату.
     """
-    logger.info("Фоновий таймер авто-відправки MP4 пісень запущено.")
+    logger.info("Фоновий таймер авто-відправки пісень запущено.")
     while True:
         try:
             await asyncio.sleep(20)
             due_chats = await database.get_due_chats()
             for chat_id in due_chats:
-                success = await send_random_mp4_song(bot, chat_id)
+                success = await send_random_song(bot, chat_id)
                 if success:
                     await database.update_chat_last_sent(chat_id)
                 await asyncio.sleep(0.5)
@@ -117,17 +129,17 @@ async def cmd_start(message: types.Message):
     await database.register_chat(message.chat.id, chat_title)
 
     text = (
-        "🇺🇦 <b>Привіт! Я бот «Патріотична Музика MP4».</b>\n\n"
-        "У моїй базі зібрано <b>100 культових українських пісень</b> (ОУН-УПА, Січові Стрільці, Козацькі думи, Сучасні бойові хіти).\n\n"
-        "Я надсилаю <b>ВИКЛЮЧНО РЕАЛЬНІ MP4 ВІДЕО-ТРЕКИ</b> (без посилань):\n"
-        "• ⏰ <b>Автоматично кожні 10 хвилин</b> (або за вашим власним інтервалом)!\n"
+        "🇺🇦 <b>Привіт! Я бот «Патріотична Музика УПА».</b>\n\n"
+        "У моїй базі зібрано <b>100 культових історичних пісень</b> (ОУН-УПА 1940-х, Січові Стрільці, Козацькі думи).\n\n"
+        "Я <b>завантажую звук із відео</b>, надсилаю аудіотрек прямо в чат та додаю посилання на повний відеокліп:\n"
+        "• ⏰ <b>Автоматично за таймером</b> (за замовчуванням кожні 10 хв)!\n"
         "• 🎵 За командою <code>/music</code> у будь-який момент!\n\n"
         "<b>Команди:</b>\n"
-        "• /music або /song — Отримати випадкову MP4 пісню зараз\n"
+        "• /music або /song — Отримати випадкову пісню зараз\n"
         "• /settings [час] — Налаштувати таймер авто-відправки (наприклад: <code>/settings 5m</code>, <code>/settings 15m</code>, <code>/settings 1h</code>)\n"
         "• /list — Список 100 пісень у базі\n"
-        "• /autoplay on|off — Увімкнути/вимкнути авто-відправку в чаті\n"
-        "• /addmusic [назва] — Додати своє MP4 відео (для адміна)\n\n"
+        "• /autoplay on|off — Увімкнути/вимкнути автоплей у чаті\n"
+        "• /addmusic [назва] — Додати власне аудіо/відео (для адміна)\n\n"
         "🇺🇦 <i>Слава Україні! Героям Слава!</i>"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
@@ -138,15 +150,15 @@ async def cmd_help(message: types.Message):
     """Обробник команди /help."""
     text = (
         "📋 <b>Список команд бота:</b>\n\n"
-        "🎬 <b>Музика:</b>\n"
-        "• /music або /song — Надіслати випадкову MP4 пісню зараз\n"
-        "• /list — Переглянути каталог 100 українських пісень\n\n"
+        "🎵 <b>Музика:</b>\n"
+        "• /music або /song — Надіслати випадковий аудіотрек із посиланням на відео\n"
+        "• /list — Переглянути каталог 100 історичних пісень\n\n"
         "⚙️ <b>Налаштування автоплею:</b>\n"
         "• <code>/settings</code> — Переглянути поточний інтервал відправки\n"
         "• <code>/settings [час]</code> — Встановити свій інтервал (наприклад: <code>/settings 5m</code>, <code>/settings 15m</code>, <code>/settings 30m</code>, <code>/settings 1h</code>)\n"
         "• <code>/autoplay on</code> або <code>/autoplay off</code> — Увімкнути/вимкнути автоплей\n\n"
         "👮‍♂️ <b>Для адміністраторів:</b>\n"
-        "• <code>/addmusic [назва]</code> (відповіддю на MP4 відео або в описі до відео) — Додати трек у базу\n"
+        "• <code>/addmusic [назва]</code> (відповіддю на аудіо/відео або з файлом) — Додати трек у базу\n"
         "• <code>/delmusic [ID]</code> — Видалити пісню за номером\n"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
@@ -154,31 +166,21 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("music", "song", "play"))
 async def cmd_music(message: types.Message, bot: Bot):
-    """Миттєва відправка випадкової MP4 пісні зі 100 шедеврів."""
+    """Миттєва відправка випадкової пісні зі 100 шедеврів."""
     chat_title = message.chat.title or message.from_user.full_name or "Chat"
     await database.register_chat(message.chat.id, chat_title)
 
-    await send_random_mp4_song(bot, message.chat.id)
+    await send_random_song(bot, message.chat.id)
 
 
 @dp.message(Command("settings"))
 async def cmd_settings(message: types.Message, command: CommandObject):
-    """
-    Налаштування інтервалу авто-відправки пісень у чаті.
-    Приклади:
-    - /settings — показати поточний інтервал
-    - /settings 5m — кожні 5 хвилин
-    - /settings 15m — кожні 15 хвилин
-    - /settings 30m — кожні 30 хвилин
-    - /settings 1h — щогодини
-    - /settings 2h — кожні 2 години
-    """
+    """Налаштування інтервалу авто-відправки пісень у чаті."""
     is_admin = await check_admin_rights(message)
     if not is_admin and message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
         await message.reply("❌ Змінювати налаштування чату можуть лише адміністратори.")
         return
 
-    # Якщо передано аргумент для зміни інтервалу
     if command.args:
         parsed_min = config.parse_time_duration(command.args.strip())
         if parsed_min and parsed_min > 0:
@@ -186,7 +188,7 @@ async def cmd_settings(message: types.Message, command: CommandObject):
             duration_str = config.format_duration_ukr(parsed_min)
             await message.answer(
                 f"✅ <b>Інтервал оновлено!</b>\n"
-                f"Тепер бот автоматично надсилатиме нову MP4 пісню кожні <b>{duration_str}</b>.",
+                f"Тепер бот автоматично надсилатиме нову пісню кожні <b>{duration_str}</b>.",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -198,7 +200,6 @@ async def cmd_settings(message: types.Message, command: CommandObject):
             )
             return
 
-    # Показуємо поточні налаштування
     settings = await database.get_chat_settings(message.chat.id)
     status_str = "Увімкнено ▶️" if settings["autoplay_enabled"] else "Вимкнено ⏹️"
     duration_str = config.format_duration_ukr(settings["interval_minutes"])
@@ -243,7 +244,7 @@ async def cmd_autoplay(message: types.Message, command: CommandObject):
 
 @dp.message(Command("addmusic"))
 async def cmd_addmusic(message: types.Message, command: CommandObject):
-    """Додавання власного MP4 відео у базу бота (для адміна)."""
+    """Додавання власного треку у базу бота (для адміна)."""
     is_admin = await check_admin_rights(message)
     if not is_admin:
         await message.reply("❌ Додавати пісні можуть лише адміністратори.")
@@ -251,23 +252,23 @@ async def cmd_addmusic(message: types.Message, command: CommandObject):
 
     target_msg = message.reply_to_message if message.reply_to_message else message
     file_id = None
-    file_type = "video"
+    file_type = "audio"
 
-    if target_msg.video:
+    if target_msg.audio:
+        file_id = target_msg.audio.file_id
+        file_type = "audio"
+    elif target_msg.video:
         file_id = target_msg.video.file_id
         file_type = "video"
-    elif target_msg.document and target_msg.document.mime_type and "video" in target_msg.document.mime_type:
+    elif target_msg.document:
         file_id = target_msg.document.file_id
-        file_type = "video"
-    elif target_msg.audio:
-        file_id = target_msg.audio.file_id
         file_type = "audio"
 
     if not file_id:
         await message.reply(
-            "ℹ️ <b>Як додати своє MP4 відео:</b>\n"
-            "1. Надішліть у чат MP4 відео з підписом: <code>/addmusic Назва пісні</code>\n"
-            "2. Або відповідайте командою <code>/addmusic Назва</code> на будь-яке відео.",
+            "ℹ️ <b>Як додати свій трек:</b>\n"
+            "1. Надішліть аудіо або відео файл із підписом: <code>/addmusic Назва пісні</code>\n"
+            "2. Або відповідайте командою <code>/addmusic Назва</code> на будь-який аудіо/відео файл.",
             parse_mode=ParseMode.HTML
         )
         return
@@ -284,8 +285,8 @@ async def cmd_addmusic(message: types.Message, command: CommandObject):
     )
 
     await message.reply(
-        f"✅ <b>MP4 пісню «{title}» успішно додано!</b>\n"
-        f"Тепер вона буде в загальній ротації автоплею та за командою /music.",
+        f"✅ <b>Пісню «{title}» успішно додано!</b>\n"
+        f"Тепер вона буде в ротації автоплею та за командою /music.",
         parse_mode=ParseMode.HTML
     )
 
@@ -295,30 +296,28 @@ async def cmd_list(message: types.Message):
     """Відображає каталог 100 пісень та додані користувацькі треки."""
     custom_songs = await database.get_all_songs()
 
-    upa_count = sum(1 for s in SONGS_100 if s["category"] == "УПА")
-    uss_count = sum(1 for s in SONGS_100 if s["category"] == "УСС")
-    folk_count = sum(1 for s in SONGS_100 if s["category"] == "Народна/Козацька")
-    modern_count = sum(1 for s in SONGS_100 if s["category"] == "Сучасна Патріотична")
+    upa_count = sum(1 for s in SONGS_100 if "УПА" in s["category"])
+    uss_count = sum(1 for s in SONGS_100 if "УСС" in s["category"])
+    cossack_count = sum(1 for s in SONGS_100 if "Козацька" in s["category"] or "Стародавня" in s["category"])
 
     text = (
-        "📚 <b>Каталог зі 100 українських пісень у базі бота:</b>\n\n"
-        f"• 🗡️ <b>Пісні ОУН-УПА:</b> {upa_count} пісень\n"
-        f"• 🦅 <b>Пісні Січових Стрільців (УСС):</b> {uss_count} пісень\n"
-        f"• 🐎 <b>Козацькі та Народні думи:</b> {folk_count} пісень\n"
-        f"• 🇺🇦 <b>Сучасні Патріотичні та Бойові хіти:</b> {modern_count} пісень\n"
-        f"• 🎬 <b>Всього у базовій колекції:</b> 100 пісень у форматі MP4!\n"
+        "📚 <b>Каталог зі 100 історичних українських пісень:</b>\n\n"
+        f"• 🗡️ <b>Пісні ОУН-УПА (1940-ві роки):</b> {upa_count} пісень\n"
+        f"• 🦅 <b>Пісні Січових Стрільців (УСС 1914–1920):</b> {uss_count} пісень\n"
+        f"• 🐎 <b>Старовинні Козацькі та Повстанські думи:</b> {cossack_count} пісень\n"
+        f"• 🎵 <b>Всього у колекції:</b> 100 культових творів!\n"
     )
 
     if custom_songs:
-        text += f"\n⭐ <b>Додатково завантажено адмінами:</b> {len(custom_songs)} MP4 треків."
+        text += f"\n⭐ <b>Додатково завантажено адмінами:</b> {len(custom_songs)} треків."
 
-    text += "\n\n💡 <i>Надішліть /music, щоб отримати рандомну пісню в MP4 просто зараз!</i>"
+    text += "\n\n💡 <i>Надішліть /music, щоб отримати аудіотрек із посиланням на відео просто зараз!</i>"
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 # --- Render.com HTTP Health-Check Server ---
 async def handle_health_check(request):
-    return web.Response(text="Ukrainian MP4 Music Bot (100 Songs) is running! 🇺🇦", content_type="text/plain")
+    return web.Response(text="Ukrainian Music Bot (100 Historic Songs) is running! 🇺🇦", content_type="text/plain")
 
 
 async def start_web_server(port: int):
@@ -354,7 +353,7 @@ async def main():
             logger.warning(f"Не вдалося запустити health-check сервер на порту {port_env}: {e}")
 
     bot = Bot(token=config.BOT_TOKEN)
-    logger.info(f"Запуск бота MP4 Музики на 100 пісень (Супер-адмін: {config.SUPER_ADMIN_ID})...")
+    logger.info(f"Запуск бота Музики УПА на 100 пісень (Супер-адмін: {config.SUPER_ADMIN_ID})...")
 
     # Запуск фонового процесу авто-відправки
     asyncio.create_task(auto_play_worker(bot))

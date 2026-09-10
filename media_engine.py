@@ -1,69 +1,78 @@
 """
-Модуль створення повноцінних, 100% робочих MP4 відеофайлів для 100 українських пісень.
-Використовує H.264 відеокодек та AAC аудіокодек для бездоганного відтворення у Telegram.
+Модуль для пошуку, завантаження аудіотреків з відео та формування повідомлень.
+Використовує yt-dlp для отримання звукової доріжки пісні та посилання на відеокліп.
 """
 
 import os
-import subprocess
+import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Tuple, Optional
 
-try:
-    import imageio_ffmpeg
-    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
-except Exception:
-    FFMPEG_EXE = "ffmpeg"
-
+import yt_dlp
 from config import MUSIC_DIR
 
 logger = logging.getLogger("media_engine")
 MUSIC_DIR.mkdir(exist_ok=True)
 
 
-def generate_song_mp4(song: Dict[str, Any]) -> Path:
+def download_audio_and_get_video_url(song: Dict[str, Any]) -> Tuple[Optional[Path], str]:
     """
-    Генерує або повертає готовий валідний H.264/AAC MP4 відеофайл із реальним звуком та таймінгом.
+    Завантажує аудіодоріжку (M4A/MP3) для пісні та повертає (шлях_до_аудіо, посилання_на_відео).
+    Якщо аудіо вже є на диску — повертає збережений файл.
     """
     safe_title = "".join(c for c in song["title"] if c.isalnum() or c in " _-").strip().replace(" ", "_")
-    filename = f"{song['id']:03d}_{safe_title}.mp4"
-    filepath = MUSIC_DIR / filename
+    base_filename = f"{song['id']:03d}_{safe_title}"
 
-    # Якщо файл вже згенеровано та він більший за 10 КБ — повертаємо його
-    if filepath.exists() and filepath.stat().st_size > 10000:
-        return filepath
+    # Перевіряємо чи файл вже завантажено раніше
+    for ext in (".m4a", ".mp3", ".ogg", ".wav", ".opus", ".mp4"):
+        existing = MUSIC_DIR / f"{base_filename}{ext}"
+        if existing.exists() and existing.stat().st_size > 10000:
+            video_url = f"https://www.youtube.com/results?search_query={song['title'].replace(' ', '+')}"
+            return existing, video_url
 
-    # Параметри: 10 секунд відео, синьо-жовтий прапор + аудіо-гармоніка
-    # Частота звуку залежить від ID пісні для різноманітності мелодії
-    freq = 220 + (song["id"] * 7) % 440
+    # Пошуковий запит для YouTube
+    search_query = f"ytsearch1:{song['title']} {song['author']} пісня"
+    output_template = str(MUSIC_DIR / f"{base_filename}.%(ext)s")
 
-    cmd = [
-        FFMPEG_EXE, "-y",
-        "-f", "lavfi", "-i", "color=c=0x0057B7:s=640x360:d=10",
-        "-f", "lavfi", "-i", f"sine=frequency={freq}:duration=10",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast",
-        "-c:a", "aac", "-b:a", "128k",
-        "-shortest",
-        str(filepath)
-    ]
+    ydl_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+        "outtmpl": output_template,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 12,
+        "max_filesize": 20 * 1024 * 1024  # максимум 20 МБ
+    }
+
+    video_url = f"https://www.youtube.com/results?search_query={song['title'].replace(' ', '+')}"
 
     try:
-        res = subprocess.run(cmd, capture_output=True, timeout=15)
-        if res.returncode == 0 and filepath.exists() and filepath.stat().st_size > 0:
-            logger.info(f"Згенеровано MP4 відео: {filename} ({filepath.stat().st_size} байт)")
-            return filepath
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(search_query, download=True)
+            if info and "entries" in info and info["entries"]:
+                entry = info["entries"][0]
+                video_url = entry.get("webpage_url") or entry.get("url") or video_url
+
+            # Знаходимо щойно завантажений файл
+            for ext in (".m4a", ".mp3", ".ogg", ".wav", ".opus", ".mp4"):
+                downloaded = MUSIC_DIR / f"{base_filename}{ext}"
+                if downloaded.exists() and downloaded.stat().st_size > 5000:
+                    logger.info(f"Успішно завантажено аудіо для «{song['title']}»: {downloaded.name}")
+                    return downloaded, video_url
     except Exception as e:
-        logger.error(f"Помилка при генерації MP4 для {song['title']}: {e}")
+        logger.warning(f"Помилка завантаження аудіо через yt-dlp для «{song['title']}»: {e}")
 
-    return filepath
+    return None, video_url
 
 
-def format_song_caption(song: Dict[str, Any]) -> str:
-    """Формує красивий патріотичний підпис до MP4 відео."""
+def format_song_caption(song: Dict[str, Any], video_url: str) -> str:
+    """Формує структурований патріотичний опис із посиланням на відео."""
     return (
-        f"🎬 <b>{song['title']}</b>\n"
+        f"🎵 <b>{song['title']}</b>\n"
         f"🏷️ <i>Категорія: {song['category']}</i>\n"
         f"👤 <i>Автор / Походження: {song['author']}</i>\n\n"
         f"📜 <b>Приспів:</b>\n{song['chorus']}\n\n"
+        f"🎬 <b>Дивитися відеокліп:</b> <a href=\"{video_url}\">▶️ Відкрити відео на YouTube</a>\n\n"
         f"🇺🇦 <i>Слава Україні! Героям Слава!</i>"
     )

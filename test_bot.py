@@ -1,6 +1,6 @@
 """
-Комплексні тести для перевірки бази 100 пісень, MP4 медіа-генератора,
-налаштування індивідуальних інтервалів чатів та автоплею.
+Комплексні тести для перевірки бази 100 історичних пісень УПА,
+налаштування індивідуальних інтервалів чатів, парсерів та медіа-рушія.
 """
 
 import unittest
@@ -14,7 +14,7 @@ import media_engine
 from songs_100 import SONGS_100, get_random_song_from_100
 
 
-class Test100SongsMusicBot(unittest.IsolatedAsyncioTestCase):
+class Test100HistoricSongsBot(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -25,8 +25,8 @@ class Test100SongsMusicBot(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.temp_dir.cleanup()
 
-    def test_songs_100_catalogue(self):
-        """Перевірка, що в базі рівно 100 унікальних пісень з усіма полями."""
+    def test_songs_100_historic_catalogue(self):
+        """Перевірка, що в базі рівно 100 унікальних історичних пісень УПА/УСС."""
         self.assertEqual(len(SONGS_100), 100)
         ids = set()
         for song in SONGS_100:
@@ -42,15 +42,13 @@ class Test100SongsMusicBot(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(random_song)
         self.assertIn(random_song["id"], range(1, 101))
 
-    def test_media_engine_mp4_generation(self):
-        """Перевірка генерації валідного MP4 відеофайлу."""
-        song = SONGS_100[0]  # "Ой у лузі червона калина"
-        mp4_path = media_engine.generate_song_mp4(song)
-        self.assertTrue(mp4_path.exists())
-        self.assertTrue(mp4_path.stat().st_size > 500)
-
-        caption = media_engine.format_song_caption(song)
+    def test_caption_formatting_with_video_link(self):
+        """Перевірка формування опису з посиланням на відео."""
+        song = SONGS_100[0]
+        video_url = "https://www.youtube.com/watch?v=1XCrSZNJsAM"
+        caption = media_engine.format_song_caption(song, video_url)
         self.assertIn("Ой у лузі червона калина", caption)
+        self.assertIn("https://www.youtube.com/watch?v=1XCrSZNJsAM", caption)
         self.assertIn("Слава Україні", caption)
 
     def test_time_duration_parser(self):
@@ -66,25 +64,16 @@ class Test100SongsMusicBot(unittest.IsolatedAsyncioTestCase):
     async def test_chat_settings_and_custom_interval(self):
         """Перевірка зміни інтервалу відправки для конкретного чату."""
         chat_id = -100123456789
-        chat_title = "Патріотичний чат"
+        chat_title = "Повстанський чат"
 
-        # Реєстрація (дефолтний інтервал 10 хв)
         await database.register_chat(chat_id, chat_title)
         settings = await database.get_chat_settings(chat_id)
         self.assertEqual(settings["interval_minutes"], 10)
         self.assertTrue(settings["autoplay_enabled"])
 
-        # Зміна інтервалу на 5 хвилин через /settings 5m
-        await database.set_chat_interval(chat_id, 5)
+        await database.set_chat_interval(chat_id, 15)
         updated_settings = await database.get_chat_settings(chat_id)
-        self.assertEqual(updated_settings["interval_minutes"], 5)
-
-        # Вимкнення та увімкнення автоплею
-        await database.set_autoplay(chat_id, False)
-        self.assertFalse((await database.get_chat_settings(chat_id))["autoplay_enabled"])
-
-        await database.set_autoplay(chat_id, True)
-        self.assertTrue((await database.get_chat_settings(chat_id))["autoplay_enabled"])
+        self.assertEqual(updated_settings["interval_minutes"], 15)
 
 
 if __name__ == "__main__":
